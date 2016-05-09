@@ -10,8 +10,13 @@ Features
 [X] Sections & headers
 [X] Sticky section headers
 [X] Overflow bounce
+[X] Bottom/center alignment
 
+[ ] Pagination
+[ ] Multi touch support
+[ ] Mouse/touch panning
+[ ] Mousewheel scrolling
 [ ] Drag & drop
 [ ] Insert/remove animations
 [ ] Move animations
-[ ] Bottom alignment
+[ ] Scrollbars

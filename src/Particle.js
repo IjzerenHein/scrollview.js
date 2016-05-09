@@ -64,12 +64,17 @@ export default class Particle {
 	}
 
 	set(endValue, value, velocity, timeStamp) {
-		this._endValue = (endValue === undefined) ? this._endValue : endValue;
-		this._value = (value === undefined) ? this._value : value;
-		this._lastValue = (value === undefined) ? this._lastValue : value;
-		this._lastVelocity = (velocity === undefined) ? this._lastVelocity : velocity;
-		this._lastTime = timeStamp || Date.now();
-		this.requestUpdate();
+		if (((endValue !== undefined) && (this._endValue !== endValue)) ||
+			((value !== undefined) && (this._value !== value)) ||
+			((velocity !== undefined) && (this._lastVelocity !== velocity)) ||
+			((timeStamp !== undefined) && (this._lastTime !== timeStamp))) {
+			this._endValue = (endValue === undefined) ? this._endValue : endValue;
+			this._value = (value === undefined) ? this._value : value;
+			this._lastValue = (value === undefined) ? this._lastValue : value;
+			this._lastVelocity = (velocity === undefined) ? this._lastVelocity : velocity;
+			this._lastTime = timeStamp || Date.now();
+			this.requestUpdate();
+		}
 	}
 
 	get endValue() {
@@ -92,18 +97,18 @@ export default class Particle {
 		// override to implement
 	}
 
-	onRequestUpdate(/*cancel*/) {
+	onUpdateRequested(/*cancel*/) {
 		// override to implement
 	}
 
 	requestUpdate(cancel) {
 		if (cancel && this._updateRequested) {
 			this._updateRequested = false;
-			this.onRequestUpdate(true);
+			this.onUpdateRequested(true);
 		}
 		else if (this._enabled && !this._updateRequested) {
 			this._updateRequested = true;
-			this.onRequestUpdate();
+			this.onUpdateRequested();
 		}
 	}
 

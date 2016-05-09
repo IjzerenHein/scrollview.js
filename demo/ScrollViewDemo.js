@@ -23,30 +23,51 @@ const ListItem = (allProps) => {
 export default class ScrollViewDemo extends React.Component {
 	constructor() {
 		super();
+		this.state = {
+			height: window.innerHeight
+		};
 		this._scrollView = new ScrollView({
-			offset: -100,
-			size: 601
+			offset: 0,
+			size: this.state.height,
+			align: 1
 		});
+		this._handleResize = () => this.setState({height: window.innerHeight});
 		this._updateFn = () => this.forceUpdate();
-		this._scrollView.onRequestUpdate = (cancel) => {
+		this._scrollView.onUpdateRequested = (cancel) => {
 			this._animationFrame = cancel ? cancelAnimationFrame(this._animationFrame) : requestAnimationFrame(this._updateFn);
 		};
-		this._scrollView.onMeasureItem = (/*item*/) => {
-			return 300;
+		this._scrollView.onMeasureItem = (item) => {
+			return item.data * 50;
+			//return 100;
 		};
-		this._scrollView.insertRows(0, [1,2,3]);
+		/*this._scrollView.onSettle = () => {
+			console.log('')
+		};*/
+		//this._scrollView.insertRows(0, [1,2,3,4,5,6,7,8,9]);
+		this._scrollView.insertRows(0, [1, 2]);
+		//this._scrollView.scrollToRow(0, 1, 0);
 		
 		//setInterval(() => this._particle.endValue = this._particle.endValue ? 0 : 500, 2000);
 	}
 
+	componentDidMount() {
+		window.addEventListener('resize', this._handleResize);
+	}
+
+	componentWillUnmount() {
+		window.removeEventListener('resize', this._handleResize);
+	}
+
 	render() {
 		const children = [];
+		this._scrollView.size = this.state.height;
 		this._scrollView.onLayoutItem = (item) => {
-			console.log('s' + item.sectionIdx + 'r' + item.rowIdx);
+			//console.log('s' + item.sectionIdx + 'r' + item.rowIdx);
 			children.push(<ListItem
 				key={'s' + item.sectionIdx + 'r' + item.rowIdx}
 				offset={item.offset}
 				size={item.size}
+				onClick={this._scrollView.scrollToRow.bind(this._scrollView, item.sectionIdx, item.rowIdx, 0, true)}
 			/>);
 		};
 		this._scrollView.update();
@@ -55,7 +76,7 @@ export default class ScrollViewDemo extends React.Component {
 			height: this._scrollView.size + 'px',
 			overflow: 'hidden',
 			position: 'absolute'}}
-			onClick={() => this._scrollView.scrollToRow(0, 1)}
+			//onClick={() => this._scrollView.scrollToRow(0, 1, true)}
 			//onClick={() => this._scrollView.requestUpdate()}
 		>{children}</div>
 	}
