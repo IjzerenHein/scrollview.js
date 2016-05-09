@@ -11,11 +11,12 @@ export default class ScrollView {
 			velocityThreshold: config.scrollVelocityThreshold,
 			displacementThreshold: config.scrollDisplacementThreshold
 		});
-		this._particle.onRequestUpdate = (cancel) => this.requestUpdate(cancel);
+		this._particle.onUpdateRequested = (cancel) => this.requestUpdate(cancel);
+		this._particle.onSettle = () => this.onSettle();
 
-		this._align = (config.align !== undefined) ? config.align : 0;
-		this._size = config.size || 0;
-		this._incrementalLayouting = withDefault(config._incrementalLayouting, false);
+		this._align = withDefault(config.align, 0); // top align
+		this._size = withDefault(config.size, 0);
+		this._incrementalRendering = withDefault(config.incrementalRendering, false);
 
 		this._offset = 0;
 		this._sectionIdx = 0;
@@ -29,11 +30,11 @@ export default class ScrollView {
 	requestUpdate(cancel) {
 		if (cancel && this._updateRequested) {
 			this._updateRequested = false;
-			this.onRequestUpdate(true);
+			this.onUpdateRequested(true);
 		}
 		else if (!this._updateRequested) {
 			this._updateRequested = true;
-			this.onRequestUpdate();
+			this.onUpdateRequested();
 		}
 	}
 
@@ -50,18 +51,23 @@ export default class ScrollView {
 		}
 		const row = section.rows[item.rowIdx];
 		if (row.size === undefined) {
+			item.data = row.data;
 			row.size = this.onMeasureItem(item);
 		}
 		return row.size;
 	}
 
+	_offsetToParticleValue(startItem, offset) {
+		return startItem.offset - offset - this._offset;
+	}
+
 	_allocStartItem() {
 		const item = {
-			offset: this._particle.value + this._offset,
 			sectionIdx: this._sectionIdx,
 			rowIdx: this._rowIdx
 		};
 		item.size = this._getItemSize(item);
+		item.offset = this._particle.value + this._offset + (this._align * (this._size - item.size));
 		return item;
 	}
 
@@ -76,22 +82,6 @@ export default class ScrollView {
 
 	_freeItem(/*item*/) {
 		// TODO
-	}
-
-	scrollToRow(sectionIdx, rowIdx, animated) {
-		let item = this._allocStartItem();
-		const searchPrev = (sectionIdx < item.sectionIdx) || ((sectionIdx === item.sectionIdx) && (rowIdx < item.rowIdx));
-		while ((item.sectionIdx !== sectionIdx) || (item.rowIdx !== rowIdx)) {
-			item = searchPrev ? this._getPrevItem(item) : this._getNextItem(item);
-		}
-		const initialOffset = this._particle.value + this._offset;
-		this._particle.set(
-			this._particle.endValue - (item.offset - initialOffset),
-			animated ? undefined : this._particle.endValue - (item.offset - initialOffset),
-			animated ? undefined : 0
-		);
-		this._freeItem(item);
-		this.requestUpdate();
 	}
 
 	_getNextItem(item, freeIfEndReached) {
@@ -126,8 +116,8 @@ export default class ScrollView {
 		return item;
 	}
 
-	_getFirstItemToRender() {
-		const item = this._allocStartItem();
+	_getFirstItemToRender(startItem) {
+		const item = this._cloneItem(startItem);
 		if (item.offset < 0) {
 			while ((item.offset + item.size) <= 0) {
 				if (!this._getNextItem(item)) {
@@ -149,54 +139,113 @@ export default class ScrollView {
 		return undefined;
 	}
 
-	_hasMinimalSize() {
+	_calculateBoundsNew(startItem) {
 		let totalSize = 0;
-		let topItem = this._allocStartItem();
-		let bottomItem = this._cloneItem(topItem);
+		const topBounds = (this._size - startItem.size) * -this._align;
+		const bottomBounds = topBounds + this._size;
+		let topItem = this._cloneItem(startItem);
+		let bottomItem = this._cloneItem(startItem);
+		let prevItem = topItem;
+		let nextItem = bottomItem;
 		totalSize += topItem.size;
-		while ((totalSize < this._size) && (topItem || bottomItem)) {
-			if (!bottomItem || (topItem.offset > 0)) {
-				topItem = this._getPrevItem(topItem, true);
-				totalSize += topItem ? topItem.size : 0;
+		while (prevItem || nextItem){
+			if (((topItem.offset < topBounds) && (bottomItem.offset > bottomBounds)) ||
+				((!prevItem || !nextItem) && (totalSize >= this._size))) {
+				break;
+			}
+			if (prevItem && (!nextItem || (topItem.offset > topBounds))) {
+				prevItem = this._getPrevItem(prevItem);
+				totalSize += prevItem ? prevItem.size : 0;
+				topItem = prevItem || topItem;
 			}
 			else {
-				bottomItem = this._getNextItem(bottomItem, true);
-				totalSize += bottomItem ? bottomItem.size : 0;
+				nextItem = this._getNextItem(nextItem);
+				totalSize += nextItem ? nextItem.size : 0;
+				bottomItem = nextItem || bottomItem;
 			}
+		}
+		let bounds;
+		if (totalSize < this._size) {
+			bounds = (totalSize - startItem.size) * -this._align;
+		}
+		else if (topItem.offset > topBounds) {
+			bounds = topBounds;
+		}
+		else if (bottomItem.offset < bottomBounds) {
+			bounds = bottomBounds;
+		}
+		if (bounds !== undefined) {
+			//console.log('bounds hit: ', bounds, ', offset: ', this._offset,', particle: ', particleValue);
+			this._particle.set(bounds);	
 		}
 		this._freeItem(topItem);
 		this._freeItem(bottomItem);
-		return totalSize <= this._size;
 	}
 
-	_calculateBounds(firstItem) {
-		if ((firstItem.offset > 0) || this._hasMinimalSize()) {
-			return 0;
+	_normalize(startItem) {
+		let item = this._cloneItem(startItem);
+		const targetOffset = this._size * this._align;
+		let itemOffset = item.offset + (item.size * this._align);
+		let itemSize = item.size;
+		if (itemOffset < targetOffset) {
+			item = this._getNextItem(item);
+			while (item) {
+				const nextItemOffset = item.offset + (item.size * this._align);
+				if (Math.abs(nextItemOffset - targetOffset) > Math.abs(itemOffset - targetOffset)) {
+					break;
+				}
+				this._sectionIdx = item.sectionIdx;
+				this._rowIdx = item.rowIdx;
+				this._offset += (item.size * this._align) + (itemSize * (1 - this._align));
+				itemOffset = nextItemOffset;
+				console.log('normalize down, rowIdx: ', this._rowIdx ,' offset: ', this._offset, ', size: ', itemSize);
+				itemSize = item.size;
+				item = this._getNextItem(item);
+			}
 		}
-		let item = this._cloneItem(firstItem);
-		while (item && ((item.offset + item.size) < this._size)) {
-			item = this._getNextItem(item, true)
+		else if (itemOffset > targetOffset) {
+			item = this._getPrevItem(item);
+			while (item) {
+				const prevItemOffset = item.offset + (item.size * this._align);
+				if (Math.abs(prevItemOffset - targetOffset) > Math.abs(itemOffset - targetOffset)) {
+					break;
+				}
+				this._sectionIdx = item.sectionIdx;
+				this._rowIdx = item.rowIdx;
+				//this._offset -= item.size;
+				this._offset -= (item.size * this._align) + (itemSize * (1 - this._align));
+				itemOffset = prevItemOffset;
+				console.log('normalize up, rowIdx: ', this._rowIdx ,' offset: ', this._offset, ', size: ', item.size);
+				itemSize = item.size;
+				item = this._getPrevItem(item);
+			}
 		}
 		this._freeItem(item);
-		return item ? undefined : this._size;
 	}
 
+	/**
+     * Updates the scrollview.
+     *
+     * @param {Date} [timeStamp] Time of the update.
+     * @return {ScrollView} this
+     */
 	update(timeStamp = Date.now()) {
 		//console.log('update');
 		this._updateRequested = false;
 
 		this._particle.update(timeStamp);
 
-		let item = this._getFirstItemToRender();
-		this._bounds = this._calculateBounds(item);
 		// section of first visible row (math.max(offset, 0))
 		//const stickyHeader = this._stickySections ? this._findStickySection(item) : undefined;
 		
+		// layout all visible items
+		const startItem = this._allocStartItem();
+		let item = this._getFirstItemToRender(startItem);
 		while (item && (item.offset < this._size)) {
 			if (item.size) {
 				const section = this._sections[item.sectionIdx];
 				const prevItem = (item.rowIdx === -1) ? section.header : section.rows[item.rowIdx];
-				if (!this._incrementalLayouting || (prevItem.size !== item.size) || (prevItem.offset !== item.offset)) {
+				if (!this._incrementalRendering || (prevItem.size !== item.size) || (prevItem.offset !== item.offset)) {
 					item.data = prevItem.data;
 					prevItem.size = item.size;
 					prevItem.offset = item.offset;
@@ -206,20 +255,30 @@ export default class ScrollView {
 			item = this._getNextItem(item, true);
 		}
 		this._freeItem(item);
+
+		//this._calculateBoundsNew(startItem);
+		this._normalize(startItem);
+		this._freeItem(startItem);
+
+		return this;
 	}
 
-	get bounds() {
+	/*get bounds() {
 		return this._bounds;
-	}
+	}*/
 
 	get updateRequested() {
 		return this._updateRequested;
 	}
 
-	_updateTotalSize() {
-
-	}
-
+	/**
+     * Inserts rows into the scrollview.
+     *
+     * @param {Number} rowIdx Index of the row within the section.
+     * @param {Array} rows Rows to insert.
+     * @param {Number} [sectionIdx] Index of the section.
+     * @return {ScrollView} this
+     */
 	insertRows(rowIdx, rows, sectionIdx = 0) {
 		const section = this._sections[sectionIdx];
 		for (let i = 0; i < rows.length; i++) {
@@ -230,6 +289,7 @@ export default class ScrollView {
 			});
 		}
 		this.requestUpdate();
+		return this;
 	}
 
 	insertSections(/*sectionIdx, sections*/) {
@@ -237,10 +297,66 @@ export default class ScrollView {
 		this.requestUpdate();
 	}
 
+	/**
+     * Scrolls to the given row within a section.
+     *
+     * The `align` argument specifies how the row is positioned. The default value
+     * of `undefined` means that the row is scrolled the minimal amount in order to
+     * become fully visible. Additionally, a value between 0 and 1 can be specified
+     * to align the item relative to the scrollview. 0 meaning the top, and 1 meaning
+     * the bottom. In order to align the item to the center, use 0.5.
+     *
+     * @param {Number} sectionIdx Index of the section.
+     * @param {Number} rowIdx Index of the row within the section (-1 = section-header).
+     * @param {Number} [align] Alignment of the row relative to the scrollview (0..1).
+     * @param {Bool} [animated] Set to true to animate the change in position.
+     * @return {ScrollView} this
+     */
+	scrollToRow(sectionIdx, rowIdx, align, animated) {
+		const startItem = this._allocStartItem();
+		let item = this._cloneItem(startItem);
+		const searchPrev = (sectionIdx < item.sectionIdx) || ((sectionIdx === item.sectionIdx) && (rowIdx < item.rowIdx));
+		while ((item.sectionIdx !== sectionIdx) || (item.rowIdx !== rowIdx)) {
+			item = searchPrev ? this._getPrevItem(item) : this._getNextItem(item);
+		}
+		if (align === undefined) {
+			const minOffset = this._particle.value - item.offset;
+			const maxOffset = minOffset + this._size - item.size;
+			if (this._particle.value < minOffset) {
+				this._particle.set(minOffset, animated ? undefined : minOffset, animated ? undefined : 0);				
+			}
+			else if (this._particle.value > maxOffset) {
+				this._particle.set(maxOffset, animated ? undefined : maxOffset, animated ? undefined : 0);				
+			}
+		}
+		else {
+			//const offset = this._particle.value + (startItem.offset - item.offset);
+			const offset = (this._particle.value - item.offset) + (align * (this._size - item.size));
+			console.log('offset: ', offset, ', this._offset: ', this._offset, ', size: ' + this._size);
+			this._particle.set(offset, animated ? undefined : offset, animated ? undefined : 0);
+		}
+		this._freeItem(item);
+		this._freeItem(startItem);
+		return this;
+	}
+
+	/**
+     * Position the items are aligned to when:
+     * - the total size of the items is less than the scrollview size
+     * - pagination is enabled
+     *
+     * The alignment is a number between 0 and 1. The default is 0 which
+     * means the items are aligned to the top of the view. 1 aligns the
+     * items to the bottom and 0.5 to the center.
+     *
+     * The alignment also affects the direction the scrollview is scrolled
+     * into, when inserting and removing items.
+     *
+     * @type {Number}
+     */
 	get align() {
 		return this._align;
 	}
-
 	set align(value) {
 		if (this._align !== value) {
 			this._align = value;
@@ -248,10 +364,14 @@ export default class ScrollView {
 		}
 	}
 
+	/**
+     * Window size of the scrollview.
+     *
+     * @type {Number}
+     */
 	get size() {
 		return this._size;
 	}
-
 	set size(value) {
 		if (this._size !== value) {
 			this._size = value;
@@ -264,10 +384,7 @@ export default class ScrollView {
 	}
 
 	set estimatedRowSize(value) {
-		if (this._estimatedRowSize !== value) {
-			this._estimatedRowSize = value;
-			this._updateTotalSize();
-		}
+		this._estimatedRowSize = value;
 	}
 
 	get estimatedSectionSize() {
@@ -275,10 +392,7 @@ export default class ScrollView {
 	}
 
 	set estimatedSectionSize(value) {
-		if (this._estimatedSectionSize !== value) {
-			this._estimatedSectionSize = value;
-			this._updateTotalSize();
-		}
+		this._estimatedSectionSize = value;
 	}
 
 	get scrollFriction() {
@@ -317,7 +431,12 @@ export default class ScrollView {
 		// TODO
 	}
 
-	onRequestUpdate() {
+	onSettle() {
+		// override to implement
+		console.log('settled on, offset: ', this._offset, ', particle: ', this._particle.value);
+	}
+
+	onUpdateRequested(/*cancel*/) {
 
 	}
 
